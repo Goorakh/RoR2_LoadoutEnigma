@@ -1,0 +1,13 @@
+﻿{
+	"name": "LoadoutEnigma",
+	"authorName": "Gorakh",
+	"version_number": "1.0.0",
+	"website_url": "https://github.com/Goorakh/RoR2_LoadoutEnigma",
+	"description": "TODO",
+	"dependencies": [
+		"bbepis-BepInExPack-5.4.2117",
+		"RiskofThunder-HookGenPatcher-1.2.5",
+		"RiskofThunder-R2API_Core-5.1.5",
+		"RiskofThunder-R2API_Skills-1.0.1"
+	]
+}

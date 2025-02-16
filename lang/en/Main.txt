@@ -1,0 +1,15 @@
+{
+	strings:
+	{
+		"LOADOUT_SKILL_ENIGMA": "Enigma",
+
+		"SKILL_ENIGMA_DISABLED_NAME": "Disabled",
+		"SKILL_ENIGMA_DISABLED_DESC": "",
+
+		"SKILL_ENIGMA_ENABLED_NAME": "Enabled",
+		"SKILL_ENIGMA_ENABLED_DESC": "Start with random skills that change every time they're activated.",
+
+		"SKILL_ENIGMA_SINGLE_MODE_ENABLED_NAME": "Enabled (Single Skill)",
+		"SKILL_ENIGMA_SINGLE_MODE_ENABLED_DESC": "Start with a single random skill that changes every time it's activated.",
+	}
+}
