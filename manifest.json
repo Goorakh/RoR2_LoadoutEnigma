@@ -3,7 +3,7 @@
 	"authorName": "Gorakh",
 	"version_number": "1.0.0",
 	"website_url": "https://github.com/Goorakh/RoR2_LoadoutEnigma",
-	"description": "TODO",
+	"description": "Adds a variant of Artifact of Enigma for character abilities.",
 	"dependencies": [
 		"bbepis-BepInExPack-5.4.2117",
 		"RiskofThunder-HookGenPatcher-1.2.5",
