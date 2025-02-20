@@ -1,6 +1,7 @@
 ﻿using BepInEx.Bootstrap;
 using LoadoutEnigma.Utilities;
 using RiskOfOptions;
+using RiskOfOptions.Options;
 using System;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -28,7 +29,7 @@ namespace LoadoutEnigma.ModCompatibility
                 ModSettingsManager.SetModIcon(icon, MOD_GUID, MOD_NAME);
             }
 
-            // ModSettingsManager.AddOption(...)
+            ModSettingsManager.AddOption(new StringInputFieldOption(LoadoutEnigmaPlugin.SkillBlacklistConfig));
         }
 
         static Sprite tryGetIcon()

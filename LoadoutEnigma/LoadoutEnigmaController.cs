@@ -8,7 +8,6 @@ using RoR2.Skills;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.AddressableAssets;
 
 namespace LoadoutEnigma
 {
@@ -22,6 +21,10 @@ namespace LoadoutEnigma
 
         GenericSkill _currentSingleEnabledSkillSlot;
 
+        List<Behaviour> _requiredBodySkillComponents = [];
+
+        bool _skillOverridesDirty;
+
         EnigmaSkillDef currentEnigmaSkill => EnigmaSkillSlot ? EnigmaSkillSlot.skillDef as EnigmaSkillDef : null;
 
         void Awake()
@@ -29,6 +32,19 @@ namespace LoadoutEnigma
             _body = GetComponent<CharacterBody>();
 
             int skillSlotCount = _body.skillLocator.skillSlotCount;
+
+            if (!EnigmaSkillSlot)
+            {
+                for (int i = 0; i < skillSlotCount; i++)
+                {
+                    GenericSkill skillSlot = _body.skillLocator.GetSkillAtIndex(i);
+                    if (skillSlot && skillSlot.skillFamily && LoadoutEnigmaCatalog.IsEnigmaSkillFamily(skillSlot.skillFamily))
+                    {
+                        EnigmaSkillSlot = skillSlot;
+                        break;
+                    }
+                }
+            }
 
             List<GenericSkill> passiveSkillSlots = new List<GenericSkill>(skillSlotCount);
             for (int i = 0; i < skillSlotCount; i++)
@@ -59,31 +75,53 @@ namespace LoadoutEnigma
             {
                 _skillOverrides[i] = new SkillOverrideManager(overridableSkillSlots[i]);
             }
+
+            ReadOnlyArray<Type> allRequiredComponentTypes = SurvivorSkillComponentResolver.GetAllRequiredBodyComponentTypes();
+            _requiredBodySkillComponents.EnsureCapacity(allRequiredComponentTypes.Length);
+            for (int i = 0; i < allRequiredComponentTypes.Length; i++)
+            {
+                Component requiredComponent = GetComponent(allRequiredComponentTypes[i]);
+                if (requiredComponent && requiredComponent is Behaviour requiredBehaviorComponent && !requiredBehaviorComponent.enabled)
+                {
+                    // Trigger component init
+                    requiredBehaviorComponent.enabled = true;
+                    requiredBehaviorComponent.enabled = false;
+
+                    _requiredBodySkillComponents.Add(requiredBehaviorComponent);
+                }
+            }
         }
 
         void OnEnable()
         {
             _body.onSkillActivatedAuthority += onSkillActivatedAuthority;
 
-            // Apply random skills on start
             foreach (SkillOverrideManager overrideManager in _skillOverrides)
             {
-                overrideManager.IsSwitchPending = true;
+                overrideManager.OnSkillOverrideChanged += onSkillOverrideChanged;
             }
 
-            updateSingleEnabledSkillSlot();
+            SetRandomSkills();
         }
 
         void OnDisable()
         {
             _body.onSkillActivatedAuthority -= onSkillActivatedAuthority;
 
-            for (int i = 0; i < _skillOverrides.Length; i++)
+            foreach (SkillOverrideManager overrideManager in _skillOverrides)
             {
-                _skillOverrides[i].LastActivationStateMachine = null;
-                _skillOverrides[i].IsSwitchPending = false;
-                _skillOverrides[i].CurrentOverrideSkill = null;
+                overrideManager.OnSkillOverrideChanged -= onSkillOverrideChanged;
+
+                overrideManager.LastActivationStateMachine = null;
+                overrideManager.IsSwitchPending = false;
+                overrideManager.CurrentOverrideSkill = null;
+                overrideManager.IsDisabled = false;
             }
+        }
+
+        void onSkillOverrideChanged(SkillOverrideManager overrideManager)
+        {
+            _skillOverridesDirty = true;
         }
 
         void onSkillActivatedAuthority(GenericSkill skill)
@@ -121,13 +159,6 @@ namespace LoadoutEnigma
                 activatedSkill = overrideSkillSource;
             }
 
-            int skillSlotIndex = _body.skillLocator.GetSkillSlotIndex(activatedSkill);
-            if (!ArrayUtils.IsInBounds(_skillOverrides, skillSlotIndex))
-            {
-                Log.Warning($"Activated skill {SkillCatalog.GetSkillName(activatedSkill.skillDef.skillIndex)} on {_body} is outside the bounds of skills array");
-                return;
-            }
-
             SkillOverrideManager overrideManager = findSlotOverrideManager(activatedSkill);
             if (overrideManager == null)
             {
@@ -143,7 +174,82 @@ namespace LoadoutEnigma
         {
             if (_body.hasEffectiveAuthority)
             {
+                foreach (SkillOverrideManager overrideManager in _skillOverrides)
+                {
+                    if (!overrideManager.CurrentOverrideSkill)
+                        continue;
+
+                    bool isUnusableSkill = false;
+
+                    if (overrideManager.CurrentOverrideSkill is CaptainOrbitalSkillDef captainOrbitalSkillDef &&
+                        !captainOrbitalSkillDef.isAvailable)
+                    {
+                        isUnusableSkill = true;
+                    }
+
+                    if (overrideManager.CurrentOverrideSkill is CaptainSupplyDropSkillDef captainSupplyDropSkillDef)
+                    {
+                        bool anySupplyDropAvailable = false;
+
+                        foreach (string supplyDropSlotName in captainSupplyDropSkillDef.supplyDropSkillSlotNames)
+                        {
+                            GenericSkill supplyDropSlot = _body.skillLocator.FindSkill(supplyDropSlotName);
+                            if (supplyDropSlot && supplyDropSlot.IsReady())
+                            {
+                                anySupplyDropAvailable = true;
+                            }
+                        }
+
+                        if (!anySupplyDropAvailable)
+                        {
+                            isUnusableSkill = true;
+                        }
+                    }
+
+                    if (isUnusableSkill)
+                    {
+                        Log.Debug($"Skipping unusable skill {SkillCatalog.GetSkillName(overrideManager.CurrentOverrideSkill.skillIndex)}");
+
+                        overrideManager.IsSwitchPending = true;
+                    }
+                }
+
                 handlePendingSkillActivations();
+
+                if (_skillOverridesDirty)
+                {
+                    _skillOverridesDirty = false;
+                    refreshRequiredSkillComponents();
+                }
+            }
+        }
+
+        public void SetRandomSkills()
+        {
+            foreach (SkillOverrideManager overrideManager in _skillOverrides)
+            {
+                overrideManager.IsSwitchPending = true;
+            }
+        }
+
+        void refreshRequiredSkillComponents()
+        {
+            HashSet<Type> requiredComponentTypes = [];
+            foreach (SkillOverrideManager overrideManager in _skillOverrides)
+            {
+                if (overrideManager.CurrentOverrideSkill)
+                {
+                    Type[] requiredComponentsForSkill = SurvivorSkillComponentResolver.GetRequiredBodyComponentTypes(overrideManager.CurrentOverrideSkill);
+                    requiredComponentTypes.UnionWith(requiredComponentsForSkill);
+                }
+            }
+
+            foreach (Behaviour bodyComponent in _requiredBodySkillComponents)
+            {
+                if (bodyComponent)
+                {
+                    bodyComponent.enabled = requiredComponentTypes.Contains(bodyComponent.GetType());
+                }
             }
         }
 
@@ -157,7 +263,7 @@ namespace LoadoutEnigma
                 {
                     overrideManager.IsSwitchPending = false;
 
-                    SkillDef nextSkill = pickNextSkill(overrideManager.SkillSlot);
+                    SkillDef nextSkill = pickNextSkill(overrideManager);
 
                     overrideManager.CurrentOverrideSkill = nextSkill;
 
@@ -171,60 +277,25 @@ namespace LoadoutEnigma
             }
         }
 
-        SkillDef pickNextSkill(GenericSkill skillSlot)
+        SkillDef pickNextSkill(SkillOverrideManager overrideManager)
         {
-            if (!skillSlot || !skillSlot.skillFamily)
+            if (overrideManager == null || !overrideManager.SkillSlot || !overrideManager.SkillSlot.skillFamily)
                 return null;
 
-            List<SkillDef> availableSkills = new List<SkillDef>(skillSlot.skillFamily.variants.Length);
+            List<SkillDef> availableSkills = new List<SkillDef>(overrideManager.SkillSlot.skillFamily.variants.Length);
 
             NetworkUser bodyNetworkUser = Util.LookUpBodyNetworkUser(_body);
 
             LocalUser bodyLocalUser = bodyNetworkUser ? bodyNetworkUser.localUser : null;
 
-            foreach (SkillFamily.Variant variant in skillSlot.skillFamily.variants)
+            foreach (SkillFamily.Variant variant in overrideManager.SkillSlot.skillFamily.variants)
             {
-                // Manually exclude problematic skills for now
-                // TODO: Don't do this
-                switch (SkillCatalog.GetSkillName(variant.skillDef.skillIndex))
-                {
-                    case "ChefDice":
-                    case "ChefSear":
-                    case "ChefRolyPoly":
-                    case "YesChef":
-                        if (!_body.TryGetComponent(out ChefController chefController) || !chefController.enabled)
-                            continue;
+                if (variant.skillDef == overrideManager.CurrentOverrideSkill)
+                    continue;
 
-                        break;
-
-                    case "HuntressBodyFireSeekingArrow":
-                    case "FireFlurrySeekingArrow":
-                    case "HuntressBodyGlaive":
-                        if (!_body.TryGetComponent(out HuntressTracker huntressTracker) || !huntressTracker.enabled)
-                            continue;
-
-                        break;
-
-                    case "SeekerBodySoulSpiral":
-                    case "SeekerBodySojourn":
-                    case "SeekerBodyMeditate2":
-                        if (!_body.TryGetComponent(out SeekerController seekerController) || !seekerController.enabled)
-                            continue;
-
-                        break;
-
-                    case "CrushCorruption":
-                        if (!_body.TryGetComponent(out VoidSurvivorController voidSurvivorController) || !voidSurvivorController.enabled)
-                            continue;
-
-                        break;
-
-                    case "FalseSonBodyClub":
-                        if (!_body.TryGetComponent(out FalseSonController falseSonController) || !falseSonController.enabled)
-                            continue;
-                    
-                        break;
-                }
+                bool isBlacklisted = LoadoutEnigmaPlugin.SkillBlacklist.Contains(variant.skillDef.skillIndex);
+                if (isBlacklisted)
+                    continue;
 
                 bool isVariantUnlocked = true;
                 if (variant.unlockableDef)
@@ -244,17 +315,36 @@ namespace LoadoutEnigma
                     }
                 }
 
-                bool canSelectVariant = isVariantUnlocked && variant.skillDef != skillSlot.skillDef;
+                if (!isVariantUnlocked)
+                    continue;
 
-                if (canSelectVariant)
+                Type[] requiredComponentTypes = SurvivorSkillComponentResolver.GetRequiredBodyComponentTypes(variant.skillDef);
+
+                bool missingComponents = false;
+                foreach (Type requiredComponentType in requiredComponentTypes)
                 {
-                    availableSkills.Add(variant.skillDef);
+                    if (!GetComponent(requiredComponentType))
+                    {
+                        missingComponents = true;
+                        break;
+                    }
                 }
+
+                if (missingComponents)
+                    continue;
+
+                availableSkills.Add(variant.skillDef);
             }
 
             if (availableSkills.Count == 0)
             {
-                availableSkills.Add(skillSlot.baseSkill);
+                SkillDef fallbackSkill = overrideManager.SkillSlot.baseSkill;
+                if (overrideManager.CurrentOverrideSkill)
+                {
+                    fallbackSkill = overrideManager.CurrentOverrideSkill;
+                }
+
+                availableSkills.Add(fallbackSkill);
             }
 
             return availableSkills[UnityEngine.Random.Range(0, availableSkills.Count)];
@@ -272,9 +362,10 @@ namespace LoadoutEnigma
 
             foreach (SkillOverrideManager overrideManager in _skillOverrides)
             {
+                bool isActivatableSkill = _body.skillLocator.FindSkillSlot(overrideManager.SkillSlot) != SkillSlot.None;
                 bool isSkillEnabled = !singleEnabledSkillSlot || overrideManager.SkillSlot == singleEnabledSkillSlot;
 
-                overrideManager.IsDisabled = _body.skillLocator.FindSkillSlot(overrideManager.SkillSlot) != SkillSlot.None && !isSkillEnabled;
+                overrideManager.IsDisabled = isActivatableSkill && !isSkillEnabled;
             }
 
             _currentSingleEnabledSkillSlot = singleEnabledSkillSlot;
@@ -358,9 +449,11 @@ namespace LoadoutEnigma
                 }
             }
 
-            SkillDef _resolvedOverrideSkill;
+            public SkillDef ResolvedOverrideSkill { get; private set; }
 
             public bool ShouldSwitchSkill => IsSwitchPending && (!LastActivationStateMachine || LastActivationStateMachine.IsInMainState());
+
+            public event Action<SkillOverrideManager> OnSkillOverrideChanged;
 
             public SkillOverrideManager(GenericSkill skillSlot)
             {
@@ -376,10 +469,10 @@ namespace LoadoutEnigma
                     resolvedOverrideSkill = LoadoutEnigmaContent.SkillDefs.DisabledSkill;
                 }
 
-                if (_resolvedOverrideSkill == resolvedOverrideSkill)
+                if (ResolvedOverrideSkill == resolvedOverrideSkill)
                     return;
 
-                bool wasDisabled = _resolvedOverrideSkill is DisabledSkillDef;
+                bool wasDisabled = ResolvedOverrideSkill is DisabledSkillDef;
 
                 float oldStockFraction = 1f;
                 if (SkillSlot.maxStock > 0)
@@ -387,16 +480,16 @@ namespace LoadoutEnigma
                     oldStockFraction = SkillSlot.stock / (float)SkillSlot.maxStock;
                 }
 
-                if (_resolvedOverrideSkill)
+                if (ResolvedOverrideSkill)
                 {
-                    SkillSlot.UnsetSkillOverride(this, _resolvedOverrideSkill, GenericSkill.SkillOverridePriority.Replacement);
+                    SkillSlot.UnsetSkillOverride(this, ResolvedOverrideSkill, GenericSkill.SkillOverridePriority.Replacement);
                 }
 
-                _resolvedOverrideSkill = resolvedOverrideSkill;
+                ResolvedOverrideSkill = resolvedOverrideSkill;
 
-                if (_resolvedOverrideSkill)
+                if (ResolvedOverrideSkill)
                 {
-                    SkillSlot.SetSkillOverride(this, _resolvedOverrideSkill, GenericSkill.SkillOverridePriority.Replacement);
+                    SkillSlot.SetSkillOverride(this, ResolvedOverrideSkill, GenericSkill.SkillOverridePriority.Replacement);
                 }
 
                 int stock = Mathf.Min(SkillSlot.stock, Mathf.CeilToInt(oldStockFraction * SkillSlot.maxStock));
@@ -407,6 +500,8 @@ namespace LoadoutEnigma
                 }
 
                 SkillSlot.stock = stock;
+
+                OnSkillOverrideChanged?.Invoke(this);
             }
         }
     }

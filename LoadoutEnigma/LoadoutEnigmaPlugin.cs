@@ -1,4 +1,5 @@
 using BepInEx;
+using BepInEx.Configuration;
 using LoadoutEnigma.Content;
 using LoadoutEnigma.ModCompatibility;
 using R2API.Utils;
@@ -11,6 +12,7 @@ namespace LoadoutEnigma
     [BepInDependency(R2API.R2API.PluginGUID)]
     [BepInDependency(R2API.SkillsAPI.PluginGUID)]
     [BepInDependency(RiskOfOptions.PluginInfo.PLUGIN_GUID, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(SkillSwapCompat.PLUGIN_GUID, BepInDependency.DependencyFlags.SoftDependency)]
     public class LoadoutEnigmaPlugin : BaseUnityPlugin
     {
         public const string PluginGUID = PluginAuthor + "." + PluginName;
@@ -21,6 +23,9 @@ namespace LoadoutEnigma
         static LoadoutEnigmaPlugin _instance;
         internal static LoadoutEnigmaPlugin Instance => _instance;
 
+        public static ConfigEntry<string> SkillBlacklistConfig { get; internal set; }
+        public static ConfigSkillIndexList SkillBlacklist { get; private set; }
+
         void Awake()
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
@@ -28,6 +33,9 @@ namespace LoadoutEnigma
             SingletonHelper.Assign(ref _instance, this);
 
             Log.Init(Logger);
+
+            SkillBlacklistConfig = Config.Bind("General", "Skill Blacklist", "ToolbotBodySwap,ToolbotDualWield", new ConfigDescription("A comma-separated list of skills to exclude from Loadout Enigma"));
+            SkillBlacklist = new ConfigSkillIndexList(SkillBlacklistConfig);
 
             LoadoutEnigmaContent content = new LoadoutEnigmaContent();
             content.Register();
@@ -38,6 +46,13 @@ namespace LoadoutEnigma
             {
                 RiskOfOptionsCompat.AddOptions();
             }
+
+            if (SkillSwapCompat.Enabled)
+            {
+                SkillSwapCompat.Init();
+            }
+
+            SurvivorSkillComponentResolver.PreCatalogInit();
 
             SystemInitializerInjector.InjectDependency(typeof(Loadout), typeof(LoadoutEnigmaCatalog));
             SystemInitializerInjector.InjectDependency(typeof(Loadout.BodyLoadoutManager), typeof(LoadoutEnigmaCatalog));

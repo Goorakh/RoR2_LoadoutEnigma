@@ -1,4 +1,5 @@
 ﻿using LoadoutEnigma.Content;
+using LoadoutEnigma.ModCompatibility;
 using LoadoutEnigma.Utilities;
 using R2API;
 using RoR2;
@@ -13,10 +14,12 @@ namespace LoadoutEnigma
     {
         static SkillFamily[] _enigmaSkillFamilies;
 
-        [SystemInitializer(typeof(SkillCatalog), typeof(BodyCatalog), typeof(SurvivorCatalog))]
+        [SystemInitializer(typeof(SkillCatalog), typeof(BodyCatalog), typeof(SurvivorCatalog), typeof(SurvivorSkillComponentResolver))]
         static void Init()
         {
             List<SkillFamily> addedSurvivorSkillFamilies = new List<SkillFamily>(SurvivorCatalog.survivorCount);
+
+            HG.ReadOnlyArray<Type> bodySpecificComponentTypes = SurvivorSkillComponentResolver.GetAllRequiredBodyComponentTypes();
 
             foreach (SurvivorDef survivor in SurvivorCatalog.allSurvivorDefs)
             {
@@ -64,6 +67,35 @@ namespace LoadoutEnigma
                 LoadoutEnigmaController loadoutEnigmaController = survivor.bodyPrefab.AddComponent<LoadoutEnigmaController>();
                 loadoutEnigmaController.EnigmaSkillSlot = enigmaSkillSlot;
                 loadoutEnigmaController.enabled = false;
+
+                if (SkillSwapCompat.Enabled)
+                {
+                    if (!survivor.bodyPrefab.GetComponent<HuntressTracker>())
+                    {
+                        HuntressTracker huntressTracker = survivor.bodyPrefab.AddComponent<HuntressTracker>();
+                        huntressTracker.enabled = false;
+                        SurvivorSkillComponentResolver.PopulateSurvivorBodyComponent(huntressTracker);
+                    }
+
+                    // TODO: Requires resolving component/child references, only add HuntressTracker for now
+                    /*
+                    for (int i = 0; i < bodySpecificComponentTypes.Length; i++)
+                    {
+                        Type componentType = bodySpecificComponentTypes[i];
+                        if (survivor.bodyPrefab.GetComponent(componentType))
+                            continue;
+
+                        Component component = survivor.bodyPrefab.AddComponent(componentType);
+
+                        if (component is Behaviour behaviour)
+                        {
+                            behaviour.enabled = false;
+                        }
+
+                        SurvivorSkillComponentResolver.PopulateSurvivorBodyComponent(component);
+                    }
+                    */
+                }
             }
 
             if (addedSurvivorSkillFamilies.Count > 0)
